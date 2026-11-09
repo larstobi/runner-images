@@ -1,0 +1,41 @@
+name: Build runner image
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build linux/amd64 image
+        run: docker build --platform linux/amd64 --tag runner-image:test .
+      - name: Test without root, network, capabilities or a writable root filesystem
+        run: |
+          docker run --rm -i --read-only --network none --user 1000:1000 \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /work:rw,uid=1000,gid=1000,mode=0700 \
+            --tmpfs /tmp:rw,uid=1000,gid=1000,mode=0700 \
+            --env HOME=/work --env TMPDIR=/tmp \
+            runner-image:test bash -s < tests/smoke.sh
+      - name: Publish the tested image to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -eu
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker tag runner-image:test "ghcr.io/larstobi/runner-images/forgejo-ci:sha-$REVISION"
+          docker tag runner-image:test ghcr.io/larstobi/runner-images/forgejo-ci:main
+          docker push "ghcr.io/larstobi/runner-images/forgejo-ci:sha-$REVISION"
+          docker push ghcr.io/larstobi/runner-images/forgejo-ci:main
